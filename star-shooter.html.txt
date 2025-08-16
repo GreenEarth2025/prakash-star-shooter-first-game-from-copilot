@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Star Shooter</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --hud: #cde3ff;
+    --player: #38e8ff;
+    --star: #ffd86b;
+    --bullet: #ff49b6;
+    --danger: #ff6b6b;
+  }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: radial-gradient(ellipse at 50% 25%, #0d1530 0%, #070a15 60%, #03050a 100%);
+    color: var(--hud);
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  }
+  .wrap {
+    display: grid;
+    place-items: center;
+    min-height: 100%;
+    padding: 12px;
+  }
+  canvas {
+    background: linear-gradient(#050914, #0b1020 60%, #04060e);
+    width: min(94vw, 560px);
+    height: auto;
+    border: 2px solid #1b274a;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 0 60px rgba(56,232,255,0.06);
+    display: block;
+  }
+  .hint {
+    margin-top: 10px;
+    font-size: 0.9rem;
+    opacity: 0.85;
+  }
+  .small {
+    font-size: 0.8rem;
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="game" width="420" height="700" aria-label="Star Shooter game"></canvas>
+  <div class="hint">
+    Controls: Left/Right or A/D to move • Space to shoot • P to pause • R to restart
+    <div class="small">Tip: Try to chain hits; spawn rate increases with score.</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // Game state
+  const state = {
+    running: true,
+    over: false,
+    score: 0,
+    lives: 3,
+    time: 0,
+    lastShotAt: 0,
+    spawnTimer: 0,
+  };
+
+  // Player
+  const player = {
+    x: canvas.width * 0.5,
+    y: canvas.height - 60,
+    w: 36,
+    h: 26,
+    speed: 300, // px/sec
+    vx: 0,
+  };
+
+  // Entities
+  const bullets = [];
+  const stars = [];
+  const sparks = [];
+
+  // Input
+  const keys = new Set();
+  window.addEventListener('keydown', (e) => {
+    if (['ArrowLeft','ArrowRight',' ','Space','KeyA','KeyD','KeyP','KeyR'].includes(e.code)) {
+      e.preventDefault();
+    }
+    keys.add(e.code);
+    if (e.code === 'Space' || e.code === ' ') shoot();
+    if (e.code === 'KeyP') state.running = !state.running;
+    if (e.code === 'KeyR' && state.over) restart();
+  });
+  window.addEventListener('keyup', (e) => keys.delete(e.code));
+
+  function restart() {
+    state.running = true;
+    state.over = false;
+    state.score = 0;
+    state.lives = 3;
+    state.time = 0;
+    state.lastShotAt = 0;
+    state.spawnTimer = 0;
+    bullets.length = 0;
+    stars.length = 0;
+    sparks.length = 0;
+    player.x = canvas.width * 0.5;
+    player.vx = 0;
+  }
+
+  function shoot() {
+    const now = performance.now();
+    const cooldown = 160; // ms
+    if (!state.running || state.over) return;
+    if (now - state.lastShotAt < cooldown) return;
+    state.lastShotAt = now;
+    bullets.push({
+      x: player.x, y: player.y - 20,
+      w: 3, h: 10, vy: -520
+    });
+    // muzzle flash
+    sparks.push(...makeSparks(player.x, player.y - 20, 6, '#ffd1f0'));
+  }
+
+  function spawnStar() {
+    const pad = 20;
+    const x = rand(pad, canvas.width - pad);
+    const r = rand(6, 10);
+    const speed = rand(70, 160) + Math.min(240, state.score * 1.2);
+    const sway = rand(0.3, 1.2) * (Math.random() < 0.5 ? -1 : 1);
+    stars.push({x, y: -20, r, vy: speed, sway, t: Math.random() * Math.PI * 2, hp: 1});
+  }
+
+  function makeSparks(x, y, count, color) {
+    const arr = [];
+    for (let i = 0; i < count; i++) {
+      const a = rand(0, Math.PI * 2);
+      const s = rand(40, 180);
+      arr.push({x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.2, 0.6), age: 0, color});
+    }
+    return arr;
+  }
+
+  function update(dt) {
+    if (!state.running || state.over) return;
+
+    state.time += dt;
+    state.spawnTimer += dt;
+
+    // Dynamic spawn rate: faster with score
+    const base = 0.9;
+    const min = 0.15;
+    const rate = Math.max(min, base - state.score * 0.002); // seconds
+    if (state.spawnTimer >= rate) {
+      state.spawnTimer = 0;
+      spawnStar();
+    }
+
+    // Input -> velocity
+    const left = keys.has('ArrowLeft') || keys.has('KeyA');
+    const right = keys.has('ArrowRight') || keys.has('KeyD');
+    player.vx = (right - left) * player.speed; // coerces to 1/0/-1
+    player.x += player.vx * dt;
+    player.x = clamp(player.x, 20, canvas.width - 20);
+
+    // Bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.y += b.vy * dt;
+      if (b.y + b.h < 0) bullets.splice(i, 1);
+    }
+
+    // Stars
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      s.t += dt * s.sway;
+      s.x += Math.sin(s.t) * 20 * dt;
+      s.y += s.vy * dt;
+      // bottom collision -> lose life
+      if (s.y - s.r > canvas.height) {
+        stars.splice(i, 1);
+        loseLife();
+      }
+      // player collision
+      if (circleRectOverlap(s.x, s.y, s.r, player.x - player.w/2, player.y - player.h/2, player.w, player.h)) {
+        spawnExplosion(s.x, s.y);
+        stars.splice(i, 1);
+        loseLife();
+      }
+    }
+
+    // Bullet-Star collisions
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        const b = bullets[j];
+        if (rectCircleOverlap(b.x - b.w/2, b.y - b.h/2, b.w, b.h, s.x, s.y, s.r)) {
+          bullets.splice(j, 1);
+          s.hp -= 1;
+          if (s.hp <= 0) {
+            state.score += 10;
+            spawnExplosion(s.x, s.y);
+            stars.splice(i, 1);
+          }
+          break;
+        }
+      }
+    }
+
+    // Sparks
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i];
+      p.age += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.98;
+      p.vy += 200 * dt;
+      if (p.age >= p.life) sparks.splice(i, 1);
+    }
+  }
+
+  function loseLife() {
+    state.lives -= 1;
+    if (state.lives <= 0) {
+      state.over = true;
+      state.running = false;
+    } else {
+      // brief grace
+      sparks.push(...makeSparks(player.x, player.y, 20, '#ff9191'));
+    }
+  }
+
+  function spawnExplosion(x, y) {
+    sparks.push(...makeSparks(x, y, 24, '#fff0c2'));
+    sparks.push(...makeSparks(x, y, 16, '#ffd86b'));
+    sparks.push(...makeSparks(x, y, 10, '#ffb86b'));
+  }
+
+  // Drawing
+  function draw() {
+    // Background
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawBackdrop();
+
+    // HUD
+    ctx.fillStyle = '#cde3ff';
+    ctx.font = '16px system-ui, Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Score: ${state.score}`, 14, 24);
+    ctx.fillText(`Lives: ${state.lives}`, 14, 44);
+
+    // Player
+    drawPlayer();
+
+    // Stars
+    for (const s of stars) drawStar(s);
+
+    // Bullets
+    for (const b of bullets) {
+      ctx.fillStyle = '#ff49b6';
+      roundRect(ctx, b.x - b.w/2, b.y - b.h/2, b.w, b.h, 2, true, false);
+    }
+
+    // Sparks
+    for (const p of sparks) {
+      const t = 1 - (p.age / p.life);
+      ctx.globalAlpha = Math.max(0, t);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 2, 2);
+      ctx.globalAlpha = 1;
+    }
+
+    // Overlays
+    if (!state.running && !state.over) {
+      overlay('Paused', 'Press P to resume');
+    }
+    if (state.over) {
+      overlay('Game Over', `Score: ${state.score}  •  Press R to restart`);
+    }
+  }
+
+  function drawBackdrop() {
+    // gradient glow
+    const g = ctx.createRadialGradient(canvas.width/2, canvas.height*0.25, 10, canvas.width/2, canvas.height*0.25, canvas.height*0.9);
+    g.addColorStop(0, 'rgba(56,232,255,0.06)');
+    g.addColorStop(1, 'rgba(56,232,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // twinkling static stars
+    for (let i = 0; i < 80; i++) {
+      const x = (i * 53) % canvas.width;
+      const y = (i * 97) % canvas.height;
+      const a = 0.2 + 0.8 * Math.abs(Math.sin((state.time * 0.5 + i) * 0.7));
+      ctx.globalAlpha = a * 0.25;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawPlayer() {
+    const {x, y, w, h} = player;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = '#38e8ff';
+    ctx.strokeStyle = '#0af';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -h/2);
+    ctx.lineTo(-w/2, h/2);
+    ctx.lineTo(w/2, h/2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // cockpit
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI*2);
+    ctx.fill();
+    // jet glow
+    const grad = ctx.createRadialGradient(0, h/2, 2, 0, h/2+16, 20);
+    grad.addColorStop(0, 'rgba(56,232,255,0.8)');
+    grad.addColorStop(1, 'rgba(56,232,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(0, h/2+8, 6, 18, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawStar(s) {
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate((s.t % (Math.PI*2)) * 0.5);
+    const r = s.r;
+    const spikes = 5;
+    let rot = Math.PI / 2 * 3;
+    const step = Math.PI / spikes;
+    ctx.beginPath();
+    ctx.moveTo(0, -r);
+    for (let i = 0; i < spikes; i++) {
+      ctx.lineTo(Math.cos(rot) * r, Math.sin(rot) * r);
+      rot += step;
+      ctx.lineTo(Math.cos(rot) * (r * 0.5), Math.sin(rot) * (r * 0.5));
+      rot += step;
+    }
+    ctx.lineTo(0, -r);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(-r, -r, r, r);
+    g.addColorStop(0, '#fff0c2');
+    g.addColorStop(1, '#ffd86b');
+    ctx.fillStyle = g;
+    ctx.strokeStyle = '#f5b94b';
+    ctx.lineWidth = 1.2;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function overlay(title, subtitle) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e6f1ff';
+    ctx.font = 'bold 32px system-ui, Arial';
+    ctx.fillText(title, canvas.width/2, canvas.height/2 - 10);
+    ctx.font = '16px system-ui, Arial';
+    ctx.fillText(subtitle, canvas.width/2, canvas.height/2 + 20);
+    ctx.restore();
+  }
+
+  // Geometry helpers
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function rectCircleOverlap(rx, ry, rw, rh, cx, cy, cr) {
+    const nx = clamp(cx, rx, rx + rw);
+    const ny = clamp(cy, ry, ry + rh);
+    const dx = cx - nx, dy = cy - ny;
+    return (dx*dx + dy*dy) <= cr*cr;
+  }
+
+  function circleRectOverlap(cx, cy, cr, rx, ry, rw, rh) {
+    return rectCircleOverlap(rx, ry, rw, rh, cx, cy, cr);
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+    if (typeof r === 'number') r = {tl:r, tr:r, br:r, bl:r};
+    ctx.beginPath();
+    ctx.moveTo(x + r.tl, y);
+    ctx.lineTo(x + w - r.tr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+    ctx.lineTo(x + w, y + h - r.br);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+    ctx.lineTo(x + r.bl, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+    ctx.lineTo(x, y + r.tl);
+    ctx.quadraticCurveTo(x, y, x + r.tl, y);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  // Main loop
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
